@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+sqlalchemy
+pydantic
+python-dotenv
+openai
+aiofiles
+python-multipart
+apscheduler
+websockets
+redis
+numpy
+scikit-learn
+chromadb
+sentence-transformers
+networkx
