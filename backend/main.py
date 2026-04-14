@@ -20,6 +20,19 @@ from backend.world_engine.world_clock import get_current_world_time
 from backend.world_engine.world_api import (
     get_location_context, get_npc_context, get_player_context
 )
+from backend.procedural.location_generator import (
+    create_procedural_location,
+    generate_complete_dungeon,
+)
+from backend.procedural.npc_generator import create_procedural_npc
+from backend.procedural.item_generator import (
+    generate_item_with_lore,
+    generate_treasure_hoard,
+)
+from backend.procedural.event_generator import (
+    generate_world_event,
+    run_autonomous_world_tick,
+)
 from backend.logger import get_logger
 
 logger = get_logger("main")
@@ -307,3 +320,279 @@ def health():
         "service": "AI Game Master Engine",
         "version": "0.1.0",
     }
+
+# ══════════════════════════════════════════════════════════════════
+# STAGE 2 — Procedural World Generator
+# ══════════════════════════════════════════════════════════════════
+
+@app.post("/generate/location", tags=["Stage 2 - Procedural"])
+def generate_location(
+    world_id: int,
+    region_id: int,
+    location_type: str = None,
+    name: str = None,
+):
+    """
+    Procedurally generates a new location.
+    Type and content are determined by terrain biome.
+    All content is consistent with current world state.
+
+    location_type: city|village|dungeon|tavern|castle|ruins|mine|temple
+    Leave empty to auto-select based on terrain.
+    """
+    logger.info(f"Generate location | world={world_id} | region={region_id}")
+    try:
+        result = create_procedural_location(
+            world_id=world_id,
+            region_id=region_id,
+            location_type=location_type,
+            name=name,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Location generation failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.post("/generate/dungeon", tags=["Stage 2 - Procedural"])
+def generate_dungeon(
+    world_id: int,
+    region_id: int,
+    danger_level: int = None,
+    theme: str = None,
+):
+    """
+    Generates a complete dungeon with:
+    - 3 floors with enemies, hazards, treasures
+    - Boss encounter with lore
+    - Unique legendary treasure
+    - Quest hooks connected to world events
+
+    danger_level: 1-10 (default: matches region)
+    theme: optional flavor (e.g. 'undead', 'dwarven', 'arcane')
+    """
+    logger.info(f"Generate dungeon | world={world_id} | region={region_id}")
+    try:
+        result = generate_complete_dungeon(
+            world_id=world_id,
+            region_id=region_id,
+            danger_level=danger_level,
+            theme=theme,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Dungeon generation failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.post("/generate/npc", tags=["Stage 2 - Procedural"])
+def generate_npc_endpoint(
+    world_id: int,
+    location_id: int,
+    role: str = "peasant",
+    faction_id: int = None,
+):
+    """
+    Generates a context-aware NPC.
+
+    The NPC knows world events, has opinions about factions,
+    and has personal goals connected to the current world state.
+
+    role: merchant|guard|innkeeper|blacksmith|mage|priest|
+          thief|noble|peasant|warrior|quest_giver|villain
+    """
+    logger.info(
+        f"Generate NPC | world={world_id} | "
+        f"location={location_id} | role={role}"
+    )
+    try:
+        result = create_procedural_npc(
+            world_id=world_id,
+            location_id=location_id,
+            role=role,
+            faction_id=faction_id,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"NPC generation failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.post("/generate/item", tags=["Stage 2 - Procedural"])
+def generate_item_endpoint(
+    world_id: int,
+    item_type: str = None,
+    rarity: str = None,
+    location_context: str = None,
+):
+    """
+    Generates an item with lore connected to world history.
+
+    item_type: weapon|armor|potion|artifact|tool|key
+    rarity: common|uncommon|rare|legendary
+    location_context: optional description of where it was found
+    """
+    logger.info(f"Generate item | world={world_id} | type={item_type}")
+    try:
+        result = generate_item_with_lore(
+            world_id=world_id,
+            item_type=item_type,
+            rarity=rarity,
+            location_context=location_context,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Item generation failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.post("/generate/treasure", tags=["Stage 2 - Procedural"])
+def generate_treasure_endpoint(
+    world_id: int,
+    danger_level: int = 5,
+    location_context: str = None,
+):
+    """
+    Generates a full treasure hoard.
+    Number and quality of items scales with danger level.
+    """
+    logger.info(
+        f"Generate treasure | world={world_id} | danger={danger_level}"
+    )
+    try:
+        result = generate_treasure_hoard(
+            world_id=world_id,
+            danger_level=danger_level,
+            location_context=location_context,
+        )
+        return {"items": result, "total_items": len(result)}
+    except Exception as e:
+        logger.error(f"Treasure generation failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.post("/generate/event", tags=["Stage 2 - Procedural"])
+def generate_event_endpoint(
+    world_id: int,
+    event_category: str = None,
+    region_id: int = None,
+):
+    """
+    Generates a world event based on current world state.
+
+    event_category: faction_conflict|economic|natural|political|mysterious
+    Leave empty to auto-select based on world tensions.
+    """
+    logger.info(
+        f"Generate event | world={world_id} | category={event_category}"
+    )
+    try:
+        result = generate_world_event(
+            world_id=world_id,
+            event_category=event_category,
+            region_id=region_id,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Event generation failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.post("/world/{world_id}/tick", tags=["Stage 2 - Procedural"])
+def world_tick(world_id: int):
+    """
+    Runs one autonomous world tick.
+    Generates events that happen without player involvement.
+
+    In production this runs automatically every 15 minutes.
+    Call manually to test autonomous world behavior.
+    """
+    logger.info(f"Manual world tick | world_id={world_id}")
+    try:
+        events = run_autonomous_world_tick(world_id)
+        return {
+            "events_generated": len(events),
+            "events": events,
+        }
+    except Exception as e:
+        logger.error(f"World tick failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.post("/generate/expand-world", tags=["Stage 2 - Procedural"])
+def expand_world(
+    world_id: int,
+    num_locations: int = 3,
+    num_npcs: int = 5,
+):
+    """
+    Expands the world by generating multiple new locations and NPCs.
+    Distributes content across all regions.
+    """
+    logger.info(f"Expanding world | world_id={world_id}")
+    try:
+        regions = get_regions(world_id)
+        if not regions:
+            raise HTTPException(404, "No regions found")
+
+        created_locations = []
+        created_npcs = []
+
+        # Generate new locations
+        for i in range(num_locations):
+            region = random.choice(regions)
+            try:
+                location = create_procedural_location(
+                    world_id=world_id,
+                    region_id=region.id,
+                )
+                created_locations.append({
+                    "id": location["id"],
+                    "name": location["name"],
+                    "type": location["type"],
+                    "region": location["region"],
+                })
+            except Exception as e:
+                logger.warning(f"Location {i+1} failed: {e}")
+
+        # Generate new NPCs in existing locations
+        from backend.database.world_store import get_locations
+        npc_roles = [
+            "merchant", "guard", "mage", "priest",
+            "thief", "warrior", "peasant", "innkeeper",
+        ]
+
+        for i in range(num_npcs):
+            region = random.choice(regions)
+            locations = get_locations(region.id)
+            if not locations:
+                continue
+            location = random.choice(locations)
+            role = random.choice(npc_roles)
+            try:
+                npc = create_procedural_npc(
+                    world_id=world_id,
+                    location_id=location.id,
+                    role=role,
+                )
+                created_npcs.append({
+                    "id": npc["id"],
+                    "name": npc["name"],
+                    "role": npc["role"],
+                    "location": npc["location"],
+                })
+            except Exception as e:
+                logger.warning(f"NPC {i+1} failed: {e}")
+
+        return {
+            "locations_created": len(created_locations),
+            "npcs_created": len(created_npcs),
+            "locations": created_locations,
+            "npcs": created_npcs,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"World expansion failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
