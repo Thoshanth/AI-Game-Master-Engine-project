@@ -5,6 +5,24 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
+from backend.narrative.narrative_pipeline import (
+    process_player_action,
+    run_narrative_tick,
+)
+from backend.narrative.arc_generator import (
+    generate_story_arc,
+    get_active_arcs,
+    get_all_arcs,
+    advance_arc_stage,
+    resolve_arc,
+    load_arc,
+)
+from backend.narrative.plot_tracker import (
+    get_world_narrative_state,
+    get_all_threads,
+)
+from backend.narrative.player_profiler import analyze_player_behavior
+from backend.narrative.consequence_engine import generate_consequences
 from backend.database.db import init_db
 from backend.database.world_store import (
     get_world_summary, get_all_worlds,
@@ -745,3 +763,233 @@ def decay_world_emotions(world_id: int, days_passed: float = 1.0):
         "days_passed": days_passed,
         "status": "emotions decayed",
     }
+# ══════════════════════════════════════════════════════════════════
+# STAGE 4 — Dynamic Narrative Engine
+# ══════════════════════════════════════════════════════════════════
+
+@app.post("/narrative/consequence", tags=["Stage 4 - Narrative"])
+def trigger_consequence(
+    world_id: int,
+    player_id: int,
+    action_type: str,
+    action_description: str,
+    location_id: int = None,
+    target_npc_id: int = None,
+    target_faction_id: int = None,
+    generate_arc: bool = False,
+):
+    """
+    Triggers the full narrative pipeline for a player action.
+
+    Generates consequences, updates player profile,
+    optionally creates story arc, records plot thread.
+
+    action_type options:
+    player_killed_npc | player_helped_faction |
+    player_betrayed_faction | player_discovered_secret |
+    player_completed_major_quest | player_started_war
+
+    generate_arc: set True to force a new story arc from this action
+    """
+    logger.info(
+        f"Narrative consequence | action={action_type} | "
+        f"player={player_id}"
+    )
+    try:
+        result = process_player_action(
+            world_id=world_id,
+            player_id=player_id,
+            action_type=action_type,
+            action_description=action_description,
+            location_id=location_id,
+            target_npc_id=target_npc_id,
+            target_faction_id=target_faction_id,
+            generate_arc=generate_arc,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Consequence failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.get("/narrative/arcs/{world_id}", tags=["Stage 4 - Narrative"])
+def get_story_arcs(world_id: int, active_only: bool = True):
+    """
+    Get all story arcs in the world.
+    Each arc has a stage: setup → rising → climax → resolved.
+    """
+    try:
+        if active_only:
+            arcs = get_active_arcs(world_id)
+        else:
+            arcs = get_all_arcs(world_id)
+
+        return {
+            "world_id": world_id,
+            "total_arcs": len(arcs),
+            "arcs": [
+                {
+                    "arc_id": a.get("arc_id"),
+                    "title": a.get("title"),
+                    "type": a.get("type"),
+                    "logline": a.get("logline"),
+                    "stage": a.get("stage"),
+                    "status": a.get("status"),
+                    "urgency": a.get("urgency"),
+                    "created_day": a.get("created_day"),
+                }
+                for a in arcs
+            ],
+        }
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/narrative/arc/generate", tags=["Stage 4 - Narrative"])
+def create_story_arc(
+    world_id: int,
+    arc_type: str = None,
+    trigger_event: str = None,
+    player_id: int = None,
+):
+    """
+    Generates a new story arc from current world state.
+
+    arc_type: political_intrigue|mystery|faction_war|
+              personal_revenge|ancient_threat|
+              economic_crisis|romance_tragedy
+
+    The arc includes setup, rising action, climax,
+    and 3 possible resolutions based on player choices.
+    """
+    logger.info(
+        f"Generate arc | world={world_id} | type={arc_type}"
+    )
+    try:
+        arc = generate_story_arc(
+            world_id=world_id,
+            trigger_event=trigger_event,
+            player_id=player_id,
+            arc_type=arc_type,
+        )
+        return arc
+    except Exception as e:
+        logger.error(f"Arc generation failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.get("/narrative/arc/{arc_id}", tags=["Stage 4 - Narrative"])
+def get_story_arc(arc_id: str):
+    """Get full details of a specific story arc."""
+    arc = load_arc(arc_id)
+    if not arc:
+        raise HTTPException(404, f"Arc {arc_id} not found")
+    return arc
+
+
+@app.post("/narrative/arc/{arc_id}/advance", tags=["Stage 4 - Narrative"])
+def advance_story_arc(arc_id: str, new_stage: str):
+    """
+    Manually advance a story arc to its next stage.
+    Stages: setup → rising → climax → resolved
+
+    The narrative tick does this automatically over time.
+    """
+    result = advance_arc_stage(arc_id, new_stage)
+    if "error" in result:
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.post("/narrative/arc/{arc_id}/resolve", tags=["Stage 4 - Narrative"])
+def resolve_story_arc(arc_id: str, resolution_id: str):
+    """
+    Resolves a story arc with a specific ending.
+    resolution_id: resolution_a | resolution_b | resolution_c
+
+    Each resolution produces different world consequences.
+    """
+    result = resolve_arc(arc_id, resolution_id)
+    if "error" in result:
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.get("/narrative/player/{player_id}/profile", tags=["Stage 4 - Narrative"])
+def get_player_profile(player_id: int):
+    """
+    Analyze player behavior and return Bartle type profile.
+
+    Types: explorer | achiever | socializer | killer
+
+    Used by the narrative engine to customize world content
+    to match this player's preferred play style.
+    """
+    try:
+        profile = analyze_player_behavior(player_id)
+        if not profile:
+            raise HTTPException(404, f"Player {player_id} not found")
+        return profile
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/narrative/threads/{world_id}", tags=["Stage 4 - Narrative"])
+def get_plot_threads(world_id: int):
+    """
+    Get all active plot threads in the world.
+    Threads are the individual storylines being tracked.
+    Arcs contain multiple threads.
+    """
+    try:
+        threads = get_all_threads(world_id)
+        return {
+            "world_id": world_id,
+            "total_threads": len(threads),
+            "active": sum(
+                1 for t in threads if t.get("status") == "active"
+            ),
+            "resolved": sum(
+                1 for t in threads if t.get("status") == "resolved"
+            ),
+            "threads": threads,
+        }
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/narrative/state/{world_id}", tags=["Stage 4 - Narrative"])
+def get_narrative_state(world_id: int):
+    """
+    Complete narrative state of the world.
+    Shows all arcs, threads, connections, and tensions.
+    The Game Master's full picture of the story.
+    """
+    try:
+        return get_world_narrative_state(world_id)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/narrative/tick/{world_id}", tags=["Stage 4 - Narrative"])
+def narrative_tick(world_id: int):
+    """
+    Advances the narrative state of the world.
+
+    Automatically:
+    - Advances story arc stages based on time elapsed
+    - Decays NPC emotions
+    - Runs autonomous world events
+    - Auto-resolves expired arcs
+
+    In production this runs every 15 minutes via scheduler.
+    Call manually to test narrative progression.
+    """
+    try:
+        result = run_narrative_tick(world_id)
+        return result
+    except Exception as e:
+        logger.error(f"Narrative tick failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
