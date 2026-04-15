@@ -33,6 +33,20 @@ from backend.procedural.event_generator import (
     generate_world_event,
     run_autonomous_world_tick,
 )
+from backend.npc_memory.dialogue_engine import generate_npc_dialogue
+from backend.npc_memory.memory_store import (
+    store_memory,
+    get_all_memories_with_player,
+    get_memory_count,
+)
+from backend.npc_memory.relationship_engine import (
+    get_npc_relationship_with_player,
+)
+from backend.npc_memory.emotion_engine import (
+    decay_emotions,
+    update_npc_emotion,
+)
+from backend.npc_memory.personality_engine import get_personality_profile
 from backend.logger import get_logger
 
 logger = get_logger("main")
@@ -596,3 +610,138 @@ def expand_world(
     except Exception as e:
         logger.error(f"World expansion failed: {e}", exc_info=True)
         raise HTTPException(500, str(e))
+    
+# ══════════════════════════════════════════════════════════════════
+# STAGE 3 — NPC Memory & Personality System
+# ══════════════════════════════════════════════════════════════════
+
+@app.post("/npc/{npc_id}/interact", tags=["Stage 3 - NPC Memory"])
+def interact_with_npc(
+    npc_id: int,
+    player_id: int,
+    player_message: str,
+    action_type: str = "player_questioned",
+    world_id: int = None,
+):
+    """
+    Player interacts with an NPC.
+
+    The NPC responds using:
+    - Their personality (Big Five traits)
+    - Retrieved memories of this player
+    - Current emotion state
+    - Relationship score with the player
+    - Current world events
+
+    action_type determines relationship impact:
+    player_helped | player_gave_gift | player_complimented |
+    player_attacked | player_stole | player_lied |
+    player_threatened | player_traded | player_questioned |
+    player_betrayed | player_defended
+    """
+    logger.info(
+        f"NPC interact | npc={npc_id} | "
+        f"player={player_id} | action={action_type}"
+    )
+    try:
+        result = generate_npc_dialogue(
+            npc_id=npc_id,
+            player_id=player_id,
+            player_message=player_message,
+            action_type=action_type,
+            world_id=world_id,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"NPC interaction failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.get("/npc/{npc_id}/memory/{player_id}", tags=["Stage 3 - NPC Memory"])
+def get_npc_memory(npc_id: int, player_id: int):
+    """
+    Get all memories an NPC has of a specific player.
+    Shows the full interaction history from the NPC's perspective.
+    """
+    memories = get_all_memories_with_player(npc_id, player_id)
+    count = get_memory_count(npc_id)
+    return {
+        "npc_id": npc_id,
+        "player_id": player_id,
+        "total_npc_memories": count,
+        "memories_with_player": len(memories),
+        "memories": memories,
+    }
+
+
+@app.get("/npc/{npc_id}/relationship/{player_id}", tags=["Stage 3 - NPC Memory"])
+def get_relationship(npc_id: int, player_id: int):
+    """
+    Get the relationship status between an NPC and player.
+    Returns score, label, interaction history summary.
+    """
+    result = get_npc_relationship_with_player(npc_id, player_id)
+    if not result:
+        raise HTTPException(404, "NPC or player not found")
+    return result
+
+
+@app.get("/npc/{npc_id}/personality", tags=["Stage 3 - NPC Memory"])
+def get_npc_personality(npc_id: int):
+    """
+    Get an NPC's full personality profile.
+    Shows Big Five traits, dialogue style, behavioral tendencies.
+    """
+    result = get_personality_profile(npc_id)
+    if not result:
+        raise HTTPException(404, f"NPC {npc_id} not found")
+    return result
+
+
+@app.post("/npc/{npc_id}/remember", tags=["Stage 3 - NPC Memory"])
+def add_npc_memory(
+    npc_id: int,
+    memory_text: str,
+    player_id: int = None,
+    event_type: str = "world_event",
+    importance: int = 5,
+    world_day: float = 0.0,
+):
+    """
+    Manually adds a memory to an NPC.
+    Used by the world simulation when significant events happen
+    that the NPC should know about even without direct player interaction.
+
+    importance: 1-10 (10 = life-changing, 1 = minor detail)
+    """
+    memory_id = store_memory(
+        npc_id=npc_id,
+        memory_text=memory_text,
+        player_id=player_id,
+        event_type=event_type,
+        importance=importance,
+        world_day=world_day,
+    )
+    return {
+        "memory_id": memory_id,
+        "npc_id": npc_id,
+        "memory_text": memory_text,
+        "stored": True,
+    }
+
+
+@app.post("/world/{world_id}/decay-emotions", tags=["Stage 3 - NPC Memory"])
+def decay_world_emotions(world_id: int, days_passed: float = 1.0):
+    """
+    Applies emotion decay to all NPCs in the world.
+    Strong emotions fade over time — NPCs forgive (slowly).
+
+    Called automatically by the world tick.
+    Call manually to simulate time passing.
+    """
+    decay_emotions(world_id, days_passed)
+    return {
+        "world_id": world_id,
+        "days_passed": days_passed,
+        "status": "emotions decayed",
+    }
