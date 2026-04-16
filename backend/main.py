@@ -74,6 +74,33 @@ from backend.prediction.prediction_pipeline import (
     full_player_prediction,
     pre_generate_predicted_content,
 )
+import json
+from fastapi import WebSocket, WebSocketDisconnect
+from backend.multiplayer.connection_manager import manager
+from backend.multiplayer.world_sync import (
+    build_world_snapshot,
+    sync_player_move,
+    sync_world_event_to_all,
+)
+from backend.multiplayer.sync_pipeline import handle_incoming_message
+from backend.multiplayer.event_broadcaster import (
+    broadcast_world_event,
+    broadcast_player_action,
+    broadcast_npc_state_change,
+)
+from backend.simulation.faction_agent import (
+    run_faction_turn, update_faction_relations,
+)
+from backend.simulation.economy_engine import (
+    get_current_prices, process_trade,
+)
+from backend.simulation.market_manager import (
+    get_location_market, get_world_economy_report,
+)
+from backend.simulation.simulation_runner import (
+    run_simulation_tick, start_simulation,
+    stop_simulation, get_simulation_status,
+)
 from backend.npc_memory.personality_engine import get_personality_profile
 from backend.logger import get_logger
 
@@ -89,8 +116,28 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 60)
     init_db()
     logger.info("World state database initialized")
+
+    # Auto-start simulation for all existing worlds
+    from backend.database.world_store import get_all_worlds
+    worlds = get_all_worlds()
+    for world in worlds:
+        start_simulation(world.id, interval_minutes=15)
+        logger.info(
+            f"Simulation auto-started | world='{world.name}'"
+        )
+
     yield
+
     logger.info("AI Game Master Engine shutting down")
+    stop_simulation_all()
+
+
+def stop_simulation_all():
+    from backend.simulation.simulation_runner import (
+        scheduler, _active_world_ids
+    )
+    for world_id in list(_active_world_ids):
+        stop_simulation(world_id)
 
 
 app = FastAPI(
@@ -1145,3 +1192,395 @@ def pre_generate_for_player(player_id: int, world_id: int):
     except Exception as e:
         logger.error(f"Pre-generation failed: {e}", exc_info=True)
         raise HTTPException(500, str(e))
+    
+# ══════════════════════════════════════════════════════════════════
+# STAGE 6 — Multi-Player World Synchronization
+# ══════════════════════════════════════════════════════════════════
+
+@app.websocket("/ws/{world_id}/{player_id}")
+async def websocket_endpoint(
+    websocket: WebSocket,
+    world_id: int,
+    player_id: int,
+):
+    """
+    WebSocket connection endpoint for real-time multiplayer.
+
+    On connect:
+    - Player registered in ConnectionManager
+    - All other players notified of arrival
+    - World snapshot sent to new player
+
+    During session:
+    - Player sends: {action: move|chat|action|ping, data: {...}}
+    - Server responds with action result
+    - Other players receive relevant broadcasts
+
+    On disconnect:
+    - Player removed from manager
+    - All other players notified
+
+    Test with: ws://127.0.0.1:8000/ws/1/1
+    """
+    # Get character name
+    player = get_player(player_id)
+    character_name = (
+        player.character_name if player else f"Player {player_id}"
+    )
+
+    await manager.connect(
+        websocket=websocket,
+        world_id=world_id,
+        player_id=player_id,
+        character_name=character_name,
+    )
+
+    logger.info(
+        f"WebSocket connected | "
+        f"player={player_id} | world={world_id}"
+    )
+
+    try:
+        # Send world snapshot on connect
+        snapshot = await build_world_snapshot(world_id, player_id)
+        await websocket.send_text(json.dumps(snapshot))
+
+        # Message loop
+        while True:
+            raw = await websocket.receive_text()
+            response = await handle_incoming_message(
+                world_id=world_id,
+                player_id=player_id,
+                raw_message=raw,
+            )
+            await websocket.send_text(json.dumps(response))
+
+    except WebSocketDisconnect:
+        character_name = manager.disconnect(world_id, player_id)
+
+        # Notify remaining players
+        await manager.broadcast_to_world(
+            world_id=world_id,
+            message={
+                "type": "player_left",
+                "player_id": player_id,
+                "character_name": character_name,
+                "timestamp": datetime.utcnow().isoformat(),
+                "message": f"{character_name} has left the world",
+            },
+        )
+        logger.info(
+            f"WebSocket disconnected | "
+            f"player={player_id} | character='{character_name}'"
+        )
+
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}", exc_info=True)
+        manager.disconnect(world_id, player_id)
+
+
+@app.get("/multiplayer/online/{world_id}", tags=["Stage 6 - Multiplayer"])
+def get_online_players(world_id: int):
+    """
+    Get all currently connected players in a world.
+    Returns player IDs, character names, and current locations.
+    """
+    online = manager.get_online_players(world_id)
+    return {
+        "world_id": world_id,
+        "online_count": len(online),
+        "total_online_all_worlds": manager.total_online(),
+        "players": online,
+    }
+
+
+@app.post("/multiplayer/broadcast", tags=["Stage 6 - Multiplayer"])
+async def broadcast_manual_event(
+    world_id: int,
+    event_title: str,
+    event_description: str,
+    severity: str = "moderate",
+):
+    """
+    Manually broadcast a world event to all connected players.
+    Use for testing or triggering events from external systems.
+
+    severity: minor|moderate|major|catastrophic
+    """
+    await sync_world_event_to_all(
+        world_id=world_id,
+        event_title=event_title,
+        event_description=event_description,
+        severity=severity,
+    )
+    online = manager.get_online_players(world_id)
+    return {
+        "broadcast_sent": True,
+        "recipients": len(online),
+        "event_title": event_title,
+    }
+
+
+@app.get(
+    "/multiplayer/location/{location_id}/players",
+    tags=["Stage 6 - Multiplayer"],
+)
+def get_players_at_location(location_id: int, world_id: int):
+    """
+    Get all online players currently at a specific location.
+    Used to show other players in the same area.
+    """
+    players = manager.get_players_at_location(world_id, location_id)
+    return {
+        "location_id": location_id,
+        "world_id": world_id,
+        "players_here": len(players),
+        "players": players,
+    }
+
+
+@app.post("/multiplayer/move", tags=["Stage 6 - Multiplayer"])
+async def move_player_endpoint(
+    world_id: int,
+    player_id: int,
+    new_location_id: int,
+):
+    """
+    Move a player to a new location with full sync.
+
+    Broadcasts departure to old location players.
+    Broadcasts arrival to new location players.
+    Returns full context of new location.
+
+    Use this instead of the Stage 1 /player/move endpoint
+    when multiplayer sync is needed.
+    """
+    result = await sync_player_move(
+        world_id=world_id,
+        player_id=player_id,
+        new_location_id=new_location_id,
+    )
+    return result
+
+
+@app.get("/multiplayer/status", tags=["Stage 6 - Multiplayer"])
+def multiplayer_status():
+    """
+    Get overall multiplayer system status.
+    Shows total connections across all worlds.
+    """
+    all_worlds = {}
+    for world_id, connections in manager.connections.items():
+        all_worlds[world_id] = {
+            "online": len(connections),
+            "players": list(connections.keys()),
+        }
+
+    return {
+        "total_online": manager.total_online(),
+        "worlds_active": len(manager.connections),
+        "worlds": all_worlds,
+    }
+# ══════════════════════════════════════════════════════════════════
+# STAGE 7 — Economy & Faction Simulation
+# ══════════════════════════════════════════════════════════════════
+
+@app.get("/simulation/economy/{world_id}", tags=["Stage 7 - Simulation"])
+def get_economy(world_id: int):
+    """
+    Get current market prices for all commodities.
+
+    Prices are dynamically calculated based on:
+    - Active faction wars (weapons spike, luxury drops)
+    - Current season (winter = food prices spike)
+    - Faction economic power (guild = trade prices drop)
+    - Recent world events (plague = herb prices spike)
+    - Random market volatility (±5%)
+
+    Returns prices, trends, and trading opportunities.
+    """
+    try:
+        return get_world_economy_report(world_id)
+    except Exception as e:
+        logger.error(f"Economy report failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.get("/simulation/market/{location_id}", tags=["Stage 7 - Simulation"])
+def get_market(location_id: int, world_id: int):
+    """
+    Get prices available at a specific location.
+    Different location types carry different goods:
+    - City: everything
+    - Village: food, basic supplies
+    - Mine: ore, gems
+    - Temple: herbs, potions, religious items
+    - Castle: weapons, armor, horses
+    """
+    try:
+        return get_location_market(world_id, location_id)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/simulation/factions/{world_id}", tags=["Stage 7 - Simulation"])
+def get_faction_status(world_id: int):
+    """
+    Get current status of all factions including
+    resources, relations, and recent actions.
+    """
+    try:
+        factions = get_factions(world_id)
+
+        db = SessionLocal()
+        try:
+            from backend.database.db import FactionRelationship
+            all_relations = db.query(FactionRelationship).filter(
+                FactionRelationship.world_id == world_id
+            ).all()
+        finally:
+            db.close()
+
+        return {
+            "world_id": world_id,
+            "faction_count": len(factions),
+            "factions": [
+                {
+                    "id": f.id,
+                    "name": f.name,
+                    "type": f.faction_type,
+                    "wealth": f.wealth,
+                    "military_strength": f.military_strength,
+                    "political_influence": f.political_influence,
+                    "goals": json.loads(f.current_goals or "[]"),
+                }
+                for f in factions
+            ],
+            "relations": [
+                {
+                    "faction_a_id": r.faction_a_id,
+                    "faction_b_id": r.faction_b_id,
+                    "relation": r.relation,
+                    "score": round(r.relation_score, 1),
+                }
+                for r in all_relations
+            ],
+        }
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/simulation/tick/{world_id}", tags=["Stage 7 - Simulation"])
+async def manual_simulation_tick(world_id: int):
+    """
+    Manually trigger one simulation tick for a world.
+
+    Runs:
+    - All faction autonomous turns
+    - Faction relation updates
+    - Economy price recalculation
+    - Narrative arc advancement
+    - World event broadcasts to connected players
+
+    Normally runs automatically every 15 minutes.
+    Use this to test simulation behavior immediately.
+    """
+    logger.info(f"Manual tick | world_id={world_id}")
+    try:
+        result = await run_simulation_tick(world_id)
+        return result
+    except Exception as e:
+        logger.error(f"Manual tick failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.post("/simulation/trade", tags=["Stage 7 - Simulation"])
+def player_trade(
+    world_id: int,
+    player_id: int,
+    commodity: str,
+    quantity: int = 1,
+    is_buying: bool = True,
+    location_id: int = None,
+):
+    """
+    Process a player trade at current market prices.
+
+    is_buying=true: player pays gold, receives item
+    is_buying=false: player sells item, receives gold (60% of buy price)
+
+    Prices reflect current world state — buy swords when cheap,
+    sell when war drives prices up.
+
+    Available commodities: bread|meat|vegetables|ale|wine|
+    iron_ore|steel_ingot|timber|cloth|leather|herbs|
+    potion_health|sword|armor|shield|bow|arrow_bundle|
+    horse|gem_common|gem_rare|spice|silk
+    """
+    try:
+        result = process_trade(
+            world_id=world_id,
+            player_id=player_id,
+            commodity=commodity,
+            quantity=quantity,
+            is_buying=is_buying,
+            location_id=location_id,
+        )
+        if "error" in result:
+            raise HTTPException(400, result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/simulation/start/{world_id}", tags=["Stage 7 - Simulation"])
+def start_world_simulation(
+    world_id: int,
+    interval_minutes: int = 15,
+):
+    """
+    Start the autonomous simulation for a world.
+
+    Runs every interval_minutes:
+    - Faction agents make autonomous decisions
+    - Economy prices update
+    - Narrative arcs advance
+    - Events broadcast to connected players
+
+    Already starts automatically on server launch
+    for all existing worlds.
+    """
+    started = start_simulation(world_id, interval_minutes)
+    return {
+        "started": started,
+        "world_id": world_id,
+        "interval_minutes": interval_minutes,
+        "message": (
+            f"Simulation {'started' if started else 'already running'} "
+            f"for world {world_id}"
+        ),
+    }
+
+
+@app.post("/simulation/stop/{world_id}", tags=["Stage 7 - Simulation"])
+def stop_world_simulation(world_id: int):
+    """Stop the autonomous simulation for a world."""
+    stopped = stop_simulation(world_id)
+    return {
+        "stopped": stopped,
+        "world_id": world_id,
+    }
+
+
+@app.get("/simulation/status", tags=["Stage 7 - Simulation"])
+def simulation_status():
+    """
+    Get simulation status including:
+    - Scheduler running state
+    - Active world simulations
+    - Next scheduled tick times
+    - Recent tick history
+    """
+    return get_simulation_status()
