@@ -64,6 +64,16 @@ from backend.npc_memory.emotion_engine import (
     decay_emotions,
     update_npc_emotion,
 )
+from backend.prediction.sequence_predictor import predict_next_actions
+from backend.prediction.engagement_scorer import (
+    calculate_session_engagement,
+)
+from backend.prediction.frustration_detector import detect_frustration
+from backend.prediction.skill_assessor import assess_player_skill
+from backend.prediction.prediction_pipeline import (
+    full_player_prediction,
+    pre_generate_predicted_content,
+)
 from backend.npc_memory.personality_engine import get_personality_profile
 from backend.logger import get_logger
 
@@ -992,4 +1002,146 @@ def narrative_tick(world_id: int):
         return result
     except Exception as e:
         logger.error(f"Narrative tick failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+    
+# ══════════════════════════════════════════════════════════════════
+# STAGE 5 — Player Behavior Predictor
+# ══════════════════════════════════════════════════════════════════
+
+@app.get("/predict/next-action/{player_id}", tags=["Stage 5 - Prediction"])
+def get_next_action_prediction(
+    player_id: int,
+    n_predictions: int = 3,
+):
+    """
+    Predicts the player's next most likely actions
+    using a personalized Markov transition matrix.
+
+    Each prediction includes:
+    - Predicted action type
+    - Confidence score
+    - Content that should be pre-generated
+    - Alignment with player's Bartle type
+
+    More accurate as player accumulates more action history.
+    """
+    logger.info(f"Next action prediction | player={player_id}")
+    try:
+        return predict_next_actions(player_id, n_predictions)
+    except Exception as e:
+        logger.error(f"Prediction failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.get("/predict/engagement/{player_id}", tags=["Stage 5 - Prediction"])
+def get_engagement_score(
+    player_id: int,
+    session_hours: float = 24.0,
+):
+    """
+    Calculates engagement score for the player's recent session.
+
+    Score 0-10:
+    8-10 = Highly engaged
+    6-8  = Engaged
+    4-6  = Moderate
+    2-4  = Low engagement
+    0-2  = Disengaged
+
+    Returns most engaging content type and recommendations.
+    """
+    logger.info(f"Engagement scoring | player={player_id}")
+    try:
+        return calculate_session_engagement(player_id, session_hours)
+    except Exception as e:
+        logger.error(f"Engagement scoring failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.get("/predict/frustration/{player_id}", tags=["Stage 5 - Prediction"])
+def get_frustration_level(
+    player_id: int,
+    window_minutes: int = 30,
+):
+    """
+    Detects frustration signals in recent player behavior.
+
+    Signals detected:
+    - Repeated actions (stuck/confused)
+    - Action frequency drop (bored/lost)
+    - Aggressive escalation (frustrated)
+    - Quest abandonment (unclear objectives)
+    - Aimless wandering (lost/directionless)
+
+    Returns frustration level + specific intervention suggestions.
+    """
+    logger.info(f"Frustration detection | player={player_id}")
+    try:
+        return detect_frustration(player_id, window_minutes)
+    except Exception as e:
+        logger.error(f"Frustration detection failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.get("/predict/skill/{player_id}", tags=["Stage 5 - Prediction"])
+def get_skill_assessment(player_id: int):
+    """
+    Assesses player skill level across 5 dimensions:
+    - Quest completion rate
+    - Combat effectiveness
+    - Discovery rate
+    - Action diversity
+    - Decision speed
+
+    Returns overall skill level and difficulty recommendations
+    for content generation.
+
+    Levels: novice → beginner → intermediate → advanced → expert
+    """
+    logger.info(f"Skill assessment | player={player_id}")
+    try:
+        return assess_player_skill(player_id)
+    except Exception as e:
+        logger.error(f"Skill assessment failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.post("/predict/full/{player_id}", tags=["Stage 5 - Prediction"])
+def get_full_prediction(player_id: int, world_id: int):
+    """
+    Complete behavioral analysis combining all 5 systems:
+
+    1. Next action prediction (Markov chain)
+    2. Engagement scoring (0-10 score + recommendations)
+    3. Frustration detection (signals + interventions)
+    4. Skill assessment (novice → expert)
+    5. Bartle type profile (explorer/achiever/socializer/killer)
+
+    Returns unified recommendations and pre-generation needs.
+    Used by the Game Master Agent (Stage 9) to adapt the world.
+    """
+    logger.info(f"Full prediction | player={player_id}")
+    try:
+        return full_player_prediction(player_id, world_id)
+    except Exception as e:
+        logger.error(f"Full prediction failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.post("/predict/pre-generate/{player_id}", tags=["Stage 5 - Prediction"])
+def pre_generate_for_player(player_id: int, world_id: int):
+    """
+    Pre-generates content based on behavioral predictions.
+
+    If player is predicted to move → pre-generates a location.
+    If player is predicted to seek NPC → pre-generates an NPC.
+
+    This ensures zero wait time for players —
+    content is ready before they ask for it.
+    """
+    logger.info(f"Pre-generation | player={player_id}")
+    try:
+        return pre_generate_predicted_content(player_id, world_id)
+    except Exception as e:
+        logger.error(f"Pre-generation failed: {e}", exc_info=True)
         raise HTTPException(500, str(e))
