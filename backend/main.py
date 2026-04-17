@@ -35,6 +35,18 @@ from backend.database.world_store import (
 )
 from backend.world_engine.world_builder import build_complete_world
 from backend.world_engine.world_clock import get_current_world_time
+from backend.combat.combat_resolver import (
+    start_combat, resolve_round,
+    attempt_flee, load_combat,
+    ENEMY_TEMPLATES,
+)
+from backend.combat.skill_resolver import (
+    resolve_skill_attempt, SKILL_STAT_MAP,
+    DIFFICULTY_CLASSES,
+)
+from backend.combat.social_resolver import (
+    resolve_social_interaction, SOCIAL_INTERACTIONS,
+)
 from backend.world_engine.world_api import (
     get_location_context, get_npc_context, get_player_context
 )
@@ -1584,3 +1596,244 @@ def simulation_status():
     - Recent tick history
     """
     return get_simulation_status()
+
+# ══════════════════════════════════════════════════════════════════
+# STAGE 8 — Combat & Skill Resolution Engine
+# ══════════════════════════════════════════════════════════════════
+
+@app.post("/combat/start", tags=["Stage 8 - Combat"])
+def initiate_combat(
+    world_id: int,
+    player_id: int,
+    enemy_type: str = "bandit",
+    enemy_name: str = None,
+    location_id: int = None,
+):
+    """
+    Start combat between player and an enemy.
+
+    enemy_type: bandit|guard|wolf|skeleton|mage|troll
+
+    Returns combat_id for tracking subsequent rounds.
+    Rolls initiative to determine who acts first.
+
+    Player stats (strength, stealth) affect combat outcomes.
+    Location context affects narrative tone.
+    """
+    logger.info(
+        f"Combat initiated | player={player_id} | "
+        f"enemy={enemy_type}"
+    )
+    try:
+        result = start_combat(
+            world_id=world_id,
+            player_id=player_id,
+            enemy_type=enemy_type,
+            enemy_name=enemy_name,
+            location_id=location_id,
+        )
+        if "error" in result:
+            raise HTTPException(400, result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Combat start failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.post("/combat/round", tags=["Stage 8 - Combat"])
+def combat_round(
+    combat_id: str,
+    player_action: str = "attack",
+    weapon_type: str = None,
+):
+    """
+    Resolve one round of combat.
+
+    player_action: attack|defend|special
+    weapon_type: sword|dagger|axe|mace|bow|staff|spear|greataxe
+
+    Each round:
+    - Both sides roll to hit and damage
+    - Status effects tick (bleeding, stunned etc.)
+    - LLM generates vivid combat narration
+    - Checks for combat end (victory/defeat/enemy flee)
+
+    Returns round result with narration and updated HP.
+    Call repeatedly until status = ended.
+    """
+    logger.info(f"Combat round | combat_id={combat_id}")
+    try:
+        result = resolve_round(
+            combat_id=combat_id,
+            player_action=player_action,
+            weapon_type=weapon_type,
+        )
+        if "error" in result:
+            raise HTTPException(400, result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Combat round failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.post("/combat/flee", tags=["Stage 8 - Combat"])
+def flee_combat(combat_id: str):
+    """
+    Attempt to flee from combat.
+
+    Uses player stealth vs enemy agility.
+    Success: escape (combat ends, no loot)
+    Failure: enemy gets a free attack, combat continues.
+
+    High stealth players flee more reliably.
+    """
+    try:
+        result = attempt_flee(combat_id)
+        if "error" in result:
+            raise HTTPException(400, result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/combat/status/{combat_id}", tags=["Stage 8 - Combat"])
+def get_combat_status(combat_id: str):
+    """Get the current state of an active combat."""
+    state = load_combat(combat_id)
+    if not state:
+        raise HTTPException(404, "Combat not found or already ended")
+    return {
+        "combat_id": combat_id,
+        "round": state["round"],
+        "status": state["status"],
+        "player_hp": state["player"]["hp"],
+        "enemy_hp": state["enemy"]["hp"],
+        "enemy_name": state["enemy"]["name"],
+        "player_effects": [
+            e["name"] for e in state["player"]["effects"]
+        ],
+        "enemy_effects": [
+            e["name"] for e in state["enemy"]["effects"]
+        ],
+        "rounds_fought": len(state["round_log"]),
+    }
+
+
+@app.get("/combat/enemies", tags=["Stage 8 - Combat"])
+def list_enemies():
+    """List all available enemy types with their stats."""
+    return {
+        "enemies": {
+            name: {
+                "hp": stats["hp"],
+                "description": stats["description"],
+                "weapon": stats["weapon"],
+                "flee_threshold": stats["flee_threshold"],
+            }
+            for name, stats in ENEMY_TEMPLATES.items()
+        }
+    }
+
+
+@app.post("/skill/check", tags=["Stage 8 - Combat"])
+def skill_check_endpoint(
+    world_id: int,
+    player_id: int,
+    skill_type: str,
+    difficulty: str = "moderate",
+    context: str = "",
+    location_id: int = None,
+    advantage: bool = False,
+    disadvantage: bool = False,
+):
+    """
+    Resolve a skill check for a player.
+
+    skill_type: pick_lock|sneak|climb|recall_lore|detect_trap|
+                persuade|intimidate|deceive|track|first_aid|craft
+
+    difficulty: trivial|easy|moderate|hard|very_hard|nearly_impossible
+
+    advantage: roll twice take higher (favorable conditions)
+    disadvantage: roll twice take lower (unfavorable conditions)
+
+    Returns degree: critical_success|great_success|success|
+                    failure|critical_failure
+
+    LLM generates narrative description of the outcome.
+    """
+    logger.info(
+        f"Skill check | player={player_id} | "
+        f"skill={skill_type} | difficulty={difficulty}"
+    )
+    try:
+        result = resolve_skill_attempt(
+            world_id=world_id,
+            player_id=player_id,
+            skill_type=skill_type,
+            difficulty=difficulty,
+            context=context,
+            location_id=location_id,
+            advantage=advantage,
+            disadvantage=disadvantage,
+        )
+        if "error" in result:
+            raise HTTPException(400, result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Skill check failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.post("/social/attempt", tags=["Stage 8 - Combat"])
+def social_attempt(
+    world_id: int,
+    player_id: int,
+    npc_id: int,
+    interaction_type: str,
+    approach_description: str = "",
+):
+    """
+    Resolve a social interaction with an NPC.
+
+    interaction_type: persuade|intimidate|deceive|inspire|bribe
+
+    Outcome depends on:
+    - Player charisma/strength stat
+    - Current relationship score (friendly NPCs easier to persuade)
+    - NPC agreeableness personality trait
+    - NPC current emotion (happy = easier)
+
+    Success/failure updates relationship score AND NPC emotion.
+    NPC stores memory of the interaction — affects future dialogue.
+
+    Connects Stages 3 (NPC memory) + 8 (resolution).
+    """
+    logger.info(
+        f"Social attempt | player={player_id} | "
+        f"npc={npc_id} | type={interaction_type}"
+    )
+    try:
+        result = resolve_social_interaction(
+            world_id=world_id,
+            player_id=player_id,
+            npc_id=npc_id,
+            interaction_type=interaction_type,
+            approach_description=approach_description,
+        )
+        if "error" in result:
+            raise HTTPException(400, result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Social attempt failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
