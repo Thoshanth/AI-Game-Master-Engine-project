@@ -113,6 +113,10 @@ from backend.simulation.simulation_runner import (
     run_simulation_tick, start_simulation,
     stop_simulation, get_simulation_status,
 )
+from backend.gm_agents.gm_pipeline import (
+    run_gm_system,
+    run_proactive_gm_tick,
+)
 from backend.npc_memory.personality_engine import get_personality_profile
 from backend.logger import get_logger
 
@@ -1837,3 +1841,203 @@ def social_attempt(
     except Exception as e:
         logger.error(f"Social attempt failed: {e}", exc_info=True)
         raise HTTPException(500, str(e))
+
+
+
+# ══════════════════════════════════════════════════════════════════
+# STAGE 9 — Game Master Agent System
+# ══════════════════════════════════════════════════════════════════
+
+@app.post("/gm/trigger", tags=["Stage 9 - GM Agents"])
+async def gm_trigger(
+    world_id: int,
+    player_id: int,
+    trigger: str,
+    location_id: int = None,
+    show_agent_trace: bool = False,
+):
+    """
+    Triggers the full 5-agent Game Master system.
+
+    5 agents run sequentially:
+    1. World Narrator → vivid scene description
+    2. Content Director → plans next content based on player type
+    3. NPC Orchestrator → coordinates NPC proactive behavior
+    4. Conflict Resolver → handles multi-party conflicts
+    5. Continuity Agent → fact-checks all outputs
+
+    trigger options:
+    player_entered_location | player_completed_quest |
+    player_action_major | player_idle_too_long |
+    player_low_engagement | player_high_frustration |
+    npc_wants_to_speak | world_event_major
+
+    show_agent_trace=true reveals each agent's reasoning.
+    """
+    logger.info(
+        f"GM trigger | world={world_id} | "
+        f"player={player_id} | trigger={trigger}"
+    )
+    try:
+        result = run_gm_system(
+            world_id=world_id,
+            player_id=player_id,
+            trigger=trigger,
+            trigger_data={
+                "location_id": location_id,
+            },
+            show_agent_trace=show_agent_trace,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"GM trigger failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.post("/gm/describe-scene", tags=["Stage 9 - GM Agents"])
+async def gm_describe_scene(
+    world_id: int,
+    player_id: int,
+    location_id: int,
+):
+    """
+    GM describes the current scene when player enters location.
+
+    Combines:
+    - Location data (Stage 1)
+    - Current NPCs and their emotions (Stage 3)
+    - Time of day and season atmosphere (Stage 1)
+    - Recent location events (Stage 4)
+    - Other online players at location (Stage 6)
+    - Player behavior type (Stage 5)
+
+    Returns immersive scene description + suggested actions.
+    """
+    logger.info(
+        f"GM scene | location={location_id} | player={player_id}"
+    )
+    try:
+        result = run_gm_system(
+            world_id=world_id,
+            player_id=player_id,
+            trigger="player_entered_location",
+            trigger_data={"location_id": location_id},
+        )
+        return {
+            "scene_description": result["scene_description"],
+            "suggested_actions": result["suggested_actions"],
+            "proactive_npcs": result["proactive_npcs"],
+            "final_response": result["final_response"],
+            "upcoming_hooks": result["upcoming_hooks"],
+        }
+    except Exception as e:
+        logger.error(f"GM scene failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.post("/gm/handle-action", tags=["Stage 9 - GM Agents"])
+async def gm_handle_action(
+    world_id: int,
+    player_id: int,
+    action_type: str,
+    action_description: str,
+    location_id: int = None,
+    show_agent_trace: bool = False,
+):
+    """
+    GM responds to a major player action.
+
+    Generates:
+    - Narrative consequence description
+    - World reaction to the action
+    - NPC responses
+    - Next story hooks
+    - Content recommendations
+
+    Connects to Stage 4 (consequences) and Stage 3 (NPC memory).
+    """
+    logger.info(
+        f"GM action | player={player_id} | action={action_type}"
+    )
+    try:
+        result = run_gm_system(
+            world_id=world_id,
+            player_id=player_id,
+            trigger="player_action_major",
+            trigger_data={
+                "action_type": action_type,
+                "action_description": action_description,
+                "location_id": location_id,
+            },
+            show_agent_trace=show_agent_trace,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"GM action failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.post("/gm/tick/{world_id}", tags=["Stage 9 - GM Agents"])
+async def gm_proactive_tick(world_id: int):
+    """
+    Proactive GM tick — checks all online players
+    and generates GM responses for those who need attention.
+
+    Detects:
+    - Players with high frustration → sends helpful NPC
+    - Players with low engagement → injects exciting event
+    - Players idle too long → narrative hook appears
+
+    Integrated with Stage 7 simulation scheduler.
+    Normally runs automatically every 15 minutes.
+    """
+    logger.info(f"GM proactive tick | world={world_id}")
+    try:
+        responses = await run_proactive_gm_tick(world_id)
+        return {
+            "world_id": world_id,
+            "players_checked": len(responses),
+            "responses": responses,
+        }
+    except Exception as e:
+        logger.error(f"GM tick failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.get("/gm/status/{world_id}", tags=["Stage 9 - GM Agents"])
+def gm_status(world_id: int):
+    """
+    GM system status — shows recent GM activations,
+    agent performance, and current world narrative state.
+    """
+    import json
+    from pathlib import Path
+
+    gm_log_path = Path("game_data/gm_log.json")
+    recent_logs = []
+    if gm_log_path.exists():
+        with open(gm_log_path) as f:
+            logs = json.load(f)
+            recent_logs = [
+                l for l in logs
+                if l.get("world_id") == world_id
+            ][-10:]
+
+    from backend.multiplayer.connection_manager import manager
+    online = manager.get_online_players(world_id)
+
+    return {
+        "world_id": world_id,
+        "online_players": len(online),
+        "recent_gm_activations": len(recent_logs),
+        "last_activation": (
+            recent_logs[-1] if recent_logs else None
+        ),
+        "agents": [
+            "World Narrator",
+            "Content Director",
+            "NPC Orchestrator",
+            "Conflict Resolver",
+            "Continuity Agent",
+        ],
+    }
