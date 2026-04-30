@@ -118,6 +118,16 @@ from backend.gm_agents.gm_pipeline import (
     run_proactive_gm_tick,
 )
 from backend.npc_memory.personality_engine import get_personality_profile
+from backend.quest_generator.quest_pipeline import (
+    generate_personalized_quest,
+    generate_quest_chain_for_player,
+    get_active_quests_for_player,
+    complete_quest,
+    fail_quest,
+)
+from backend.quest_generator.quest_template import (
+    QuestType, QuestDifficulty, QUEST_TYPE_CONFIG,
+)
 from backend.logger import get_logger
 
 logger = get_logger("main")
@@ -2041,3 +2051,292 @@ def gm_status(world_id: int):
             "Continuity Agent",
         ],
     }
+
+
+# ══════════════════════════════════════════════════════════════════
+# STAGE 10 — Procedural Quest Generator
+# ══════════════════════════════════════════════════════════════════
+
+@app.post("/quest/generate/{player_id}", tags=["Stage 10 - Quest Generator"])
+def generate_quest(
+    player_id: int,
+    world_id: int,
+    location_id: int,
+    quest_type: str = None,
+    difficulty: str = None,
+):
+    """
+    Generates a personalized quest for a player.
+    
+    The quest is tailored to:
+    - Player's Bartle type (explorer, achiever, socializer, killer)
+    - Player's skill level (novice to expert)
+    - Current world state and recent events
+    - Player's faction relationships
+    - Available NPCs at the location
+    
+    quest_type: fetch|deliver|kill|clear|escort|investigate|
+                diplomatic|craft|explore|rescue|gather|defend
+                (leave empty for auto-selection)
+    
+    difficulty: trivial|easy|moderate|hard|very_hard|legendary
+                (leave empty for auto-selection based on skill)
+    
+    Returns a complete quest with:
+    - Title and description
+    - Quest giver NPC with dialogue
+    - Clear objectives
+    - Appropriate rewards
+    - Lore connection to world events
+    """
+    logger.info(
+        f"Generate quest | player={player_id} | "
+        f"location={location_id}"
+    )
+    try:
+        quest = generate_personalized_quest(
+            player_id=player_id,
+            world_id=world_id,
+            location_id=location_id,
+            quest_type=quest_type,
+            difficulty=difficulty,
+        )
+        return quest
+    except Exception as e:
+        logger.error(f"Quest generation failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.post("/quest/generate-chain/{player_id}", tags=["Stage 10 - Quest Generator"])
+def generate_chain(
+    player_id: int,
+    world_id: int,
+    location_id: int,
+    chain_length: int = 3,
+    starting_quest_type: str = None,
+):
+    """
+    Generates a connected quest chain for a player.
+    
+    Quest chains:
+    - Tell a cohesive story across multiple quests
+    - Escalate in difficulty and stakes
+    - Each quest unlocks the next
+    - Build to a climactic final quest
+    - Adapt based on how previous quests were completed
+    
+    chain_length: 2-5 quests (default: 3)
+    starting_quest_type: Optional type for first quest
+    
+    Returns a list of connected quests where completing
+    one unlocks the next in the chain.
+    """
+    logger.info(
+        f"Generate quest chain | player={player_id} | "
+        f"length={chain_length}"
+    )
+    try:
+        chain = generate_quest_chain_for_player(
+            player_id=player_id,
+            world_id=world_id,
+            location_id=location_id,
+            chain_length=chain_length,
+            starting_quest_type=starting_quest_type,
+        )
+        return {
+            "chain_length": len(chain),
+            "quests": chain,
+        }
+    except Exception as e:
+        logger.error(f"Quest chain generation failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.get("/quest/active/{player_id}", tags=["Stage 10 - Quest Generator"])
+def get_active_quests(player_id: int, world_id: int):
+    """
+    Get all active and available quests for a player.
+    
+    Returns quests in states:
+    - available: Quest is offered but not yet accepted
+    - active: Quest is accepted and in progress
+    
+    Each quest includes:
+    - Current objectives and progress
+    - Rewards
+    - Time remaining (if time-limited)
+    - Quest giver information
+    """
+    try:
+        quests = get_active_quests_for_player(player_id, world_id)
+        return {
+            "player_id": player_id,
+            "total_quests": len(quests),
+            "quests": quests,
+        }
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/quest/complete/{quest_id}", tags=["Stage 10 - Quest Generator"])
+def complete_quest_endpoint(
+    quest_id: int,
+    player_id: int,
+    world_id: int,
+    completion_method: str = "standard",
+):
+    """
+    Marks a quest as completed and grants rewards.
+    
+    completion_method affects future quest generation:
+    - combat: Violent approach, affects reputation with peaceful factions
+    - stealth: Subtle approach, gains favor with thieves
+    - diplomatic: Negotiation, gains favor with nobles
+    - standard: Default completion
+    
+    Grants:
+    - Gold and experience
+    - Faction reputation changes
+    - Special items (if any)
+    - Unlocks next quest in chain (if part of chain)
+    
+    The quest giver NPC will remember the completion
+    and react accordingly in future interactions.
+    """
+    logger.info(
+        f"Complete quest | quest={quest_id} | "
+        f"player={player_id} | method={completion_method}"
+    )
+    try:
+        result = complete_quest(
+            quest_id=quest_id,
+            player_id=player_id,
+            world_id=world_id,
+            completion_method=completion_method,
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        logger.error(f"Quest completion failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.post("/quest/fail/{quest_id}", tags=["Stage 10 - Quest Generator"])
+def fail_quest_endpoint(
+    quest_id: int,
+    player_id: int,
+    world_id: int,
+    reason: str = "abandoned",
+):
+    """
+    Marks a quest as failed.
+    
+    Reasons:
+    - abandoned: Player chose to abandon
+    - expired: Time limit ran out
+    - failed_objective: Critical objective failed
+    - death: Player died during quest
+    
+    Consequences:
+    - No rewards granted
+    - Possible reputation loss with quest giver
+    - Quest giver may refuse future quests
+    - May affect story arc progression
+    """
+    logger.info(f"Fail quest | quest={quest_id} | reason={reason}")
+    try:
+        result = fail_quest(
+            quest_id=quest_id,
+            player_id=player_id,
+            world_id=world_id,
+            reason=reason,
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/quest/types", tags=["Stage 10 - Quest Generator"])
+def get_quest_types():
+    """
+    Get all available quest types with descriptions.
+    
+    Each type has:
+    - Description of what the quest involves
+    - Best suited player types
+    - Typical objectives
+    - Reward types
+    - Difficulty range
+    """
+    types_info = []
+    for quest_type, config in QUEST_TYPE_CONFIG.items():
+        types_info.append({
+            "type": quest_type.value,
+            "description": config["description"],
+            "best_for": config["best_for_player_types"],
+            "typical_objectives": config["typical_objectives"],
+            "reward_types": config["reward_types"],
+            "difficulty_range": f"{config['min_difficulty']}-{config['max_difficulty']}",
+        })
+    
+    return {
+        "total_types": len(types_info),
+        "quest_types": types_info,
+    }
+
+
+@app.get("/quest/available/{location_id}", tags=["Stage 10 - Quest Generator"])
+def get_available_quests_at_location(
+    location_id: int,
+    world_id: int,
+    player_id: int = None,
+):
+    """
+    Get all available quests at a specific location.
+    
+    If player_id provided, filters to quests the player
+    can actually accept based on:
+    - Level requirements
+    - Faction reputation
+    - Prerequisite quests
+    """
+    from backend.database.db import SessionLocal, Quest, QuestState
+    
+    db = SessionLocal()
+    try:
+        query = db.query(Quest).filter(
+            Quest.world_id == world_id,
+            Quest.origin_location_id == location_id,
+            Quest.state == QuestState.AVAILABLE,
+        )
+        
+        if player_id:
+            query = query.filter(
+                (Quest.assigned_player_id == player_id) |
+                (Quest.assigned_player_id == None)
+            )
+        
+        quests = query.all()
+        
+        result = []
+        for quest in quests:
+            result.append({
+                "id": quest.id,
+                "title": quest.title,
+                "description": quest.description,
+                "type": quest.quest_type,
+                "quest_giver_id": quest.given_by_npc_id,
+                "rewards": json.loads(quest.rewards or "{}"),
+            })
+        
+        return {
+            "location_id": location_id,
+            "total_quests": len(result),
+            "quests": result,
+        }
+    
+    finally:
+        db.close()
