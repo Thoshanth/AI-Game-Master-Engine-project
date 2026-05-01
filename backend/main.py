@@ -128,6 +128,9 @@ from backend.quest_generator.quest_pipeline import (
 from backend.quest_generator.quest_template import (
     QuestType, QuestDifficulty, QUEST_TYPE_CONFIG,
 )
+from backend.world_lore.lore_pipeline import (
+    get_lore_pipeline, clear_pipeline_cache,
+)
 from backend.logger import get_logger
 
 logger = get_logger("main")
@@ -2340,3 +2343,315 @@ def get_available_quests_at_location(
     
     finally:
         db.close()
+
+
+# ══════════════════════════════════════════════════════════════════
+# STAGE 11 — World Memory & Lore Engine (GraphRAG)
+# ══════════════════════════════════════════════════════════════════
+
+@app.post("/lore/build/{world_id}", tags=["Stage 11 - GraphRAG Lore"])
+def build_lore_index(world_id: int, force_rebuild: bool = False):
+    """
+    Builds the knowledge graph and indexes it for search.
+    
+    This creates a GraphRAG index of the entire world:
+    - All entities (NPCs, players, locations, factions, quests, items) become nodes
+    - All events and relationships become edges
+    - Everything is embedded for semantic search
+    
+    force_rebuild: Set True to rebuild even if index exists
+    
+    This should be called:
+    - After world creation
+    - Periodically (every hour or when significant events occur)
+    - Before running lore queries
+    
+    The index is persistent and saved to disk.
+    """
+    logger.info(f"Building lore index | world_id={world_id}")
+    try:
+        pipeline = get_lore_pipeline(world_id)
+        pipeline.build_and_index(force_rebuild=force_rebuild)
+        
+        stats = pipeline.get_stats()
+        
+        return {
+            "world_id": world_id,
+            "status": "success",
+            "message": "Lore index built successfully",
+            "stats": stats,
+        }
+    except Exception as e:
+        logger.error(f"Lore index build failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.post("/lore/query", tags=["Stage 11 - GraphRAG Lore"])
+def query_lore(
+    world_id: int,
+    query: str,
+    max_results: int = 10,
+    max_hops: int = 2,
+    start_day: float = None,
+    end_day: float = None,
+):
+    """
+    Answers a natural language question about world lore.
+    
+    Uses GraphRAG to:
+    1. Find relevant entities via semantic search
+    2. Traverse the knowledge graph to find connections
+    3. Synthesize a natural language answer
+    
+    Example queries:
+    - "What happened to the merchant I met 3 weeks ago?"
+    - "Who killed Aldric and why?"
+    - "What is the Shadow Conclave planning?"
+    - "Tell me about the war between the kingdoms"
+    - "What quests are connected to the bandit attacks?"
+    
+    max_results: Number of entities to retrieve
+    max_hops: How many graph hops to traverse (1-3)
+    start_day/end_day: Optional time range filter
+    
+    Returns:
+    - Natural language answer
+    - Source entities and events
+    - Graph paths showing connections
+    """
+    logger.info(f"Lore query | world_id={world_id} | query='{query[:50]}...'")
+    
+    try:
+        pipeline = get_lore_pipeline(world_id)
+        
+        # Build time range tuple if provided
+        time_range = None
+        if start_day is not None and end_day is not None:
+            time_range = (start_day, end_day)
+        
+        result = pipeline.query(
+            query=query,
+            max_results=max_results,
+            max_hops=max_hops,
+            time_range=time_range,
+        )
+        
+        return result
+    
+    except Exception as e:
+        logger.error(f"Lore query failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.get("/lore/entity/{entity_type}/{entity_name}", tags=["Stage 11 - GraphRAG Lore"])
+def get_entity_lore(
+    world_id: int,
+    entity_type: str,
+    entity_name: str,
+    include_narrative: bool = True,
+):
+    """
+    Gets complete history of a specific entity.
+    
+    entity_type: npc, player, location, faction, quest, or item
+    entity_name: Name of the entity
+    include_narrative: Generate a narrative summary (default: True)
+    
+    Returns:
+    - Entity information
+    - Chronological timeline of all events involving the entity
+    - Optional narrative summary
+    
+    Example:
+    GET /lore/entity/npc/Aldric?world_id=1
+    
+    Returns Aldric's full history: when he was created, who he met,
+    what happened to him, and his current status.
+    """
+    logger.info(
+        f"Entity lore | world_id={world_id} | "
+        f"type={entity_type} | name={entity_name}"
+    )
+    
+    try:
+        pipeline = get_lore_pipeline(world_id)
+        
+        result = pipeline.get_entity_history(
+            entity_type=entity_type,
+            entity_name=entity_name,
+            include_narrative=include_narrative,
+        )
+        
+        return result
+    
+    except Exception as e:
+        logger.error(f"Entity lore failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.get("/lore/connections/{entity_type}/{entity_name}", tags=["Stage 11 - GraphRAG Lore"])
+def get_entity_connections(
+    world_id: int,
+    entity_type: str,
+    entity_name: str,
+    relation_type: str = None,
+    include_explanation: bool = True,
+):
+    """
+    Gets all connections and relationships for an entity.
+    
+    Shows:
+    - Who/what the entity is connected to
+    - Type of relationship (loves, hates, member_of, located_at, etc.)
+    - Description of each connection
+    
+    relation_type: Optional filter (e.g., "loves", "member_of", "killed_by")
+    include_explanation: Generate natural language explanation
+    
+    Example:
+    GET /lore/connections/npc/Aldric?world_id=1
+    
+    Returns all of Aldric's relationships: his wife, his faction,
+    his location, people who liked/hated him, etc.
+    """
+    logger.info(
+        f"Entity connections | world_id={world_id} | "
+        f"type={entity_type} | name={entity_name}"
+    )
+    
+    try:
+        pipeline = get_lore_pipeline(world_id)
+        
+        result = pipeline.get_entity_connections(
+            entity_type=entity_type,
+            entity_name=entity_name,
+            relation_type=relation_type,
+            include_explanation=include_explanation,
+        )
+        
+        return result
+    
+    except Exception as e:
+        logger.error(f"Entity connections failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.get("/lore/timeline", tags=["Stage 11 - GraphRAG Lore"])
+def get_world_timeline(
+    world_id: int,
+    start_day: float,
+    end_day: float,
+    event_types: str = None,
+    include_narrative: bool = True,
+):
+    """
+    Gets chronological timeline of events in a time period.
+    
+    start_day: Start of period (world days)
+    end_day: End of period (world days)
+    event_types: Optional comma-separated list (e.g., "death,quest_completed,faction_action")
+    include_narrative: Generate narrative summary
+    
+    Returns:
+    - Chronological list of all events
+    - Optional narrative summary
+    
+    Example:
+    GET /lore/timeline?world_id=1&start_day=0&end_day=7
+    
+    Returns everything that happened in the first week of the world.
+    """
+    logger.info(
+        f"Timeline | world_id={world_id} | "
+        f"days {start_day:.1f} to {end_day:.1f}"
+    )
+    
+    try:
+        pipeline = get_lore_pipeline(world_id)
+        
+        # Parse event types
+        event_type_list = None
+        if event_types:
+            event_type_list = [t.strip() for t in event_types.split(",")]
+        
+        result = pipeline.get_timeline(
+            start_day=start_day,
+            end_day=end_day,
+            event_types=event_type_list,
+            include_narrative=include_narrative,
+        )
+        
+        return result
+    
+    except Exception as e:
+        logger.error(f"Timeline failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.post("/lore/rebuild/{world_id}", tags=["Stage 11 - GraphRAG Lore"])
+def rebuild_lore_index(world_id: int):
+    """
+    Force rebuilds the entire lore index.
+    
+    Use this when:
+    - Major world changes occurred
+    - Graph seems out of sync
+    - Testing/debugging
+    
+    This clears all embeddings and rebuilds from scratch.
+    Takes longer than a normal build.
+    """
+    logger.info(f"Rebuilding lore index | world_id={world_id}")
+    
+    try:
+        pipeline = get_lore_pipeline(world_id)
+        pipeline.rebuild_index()
+        
+        stats = pipeline.get_stats()
+        
+        return {
+            "world_id": world_id,
+            "status": "success",
+            "message": "Lore index rebuilt successfully",
+            "stats": stats,
+        }
+    
+    except Exception as e:
+        logger.error(f"Lore rebuild failed: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+@app.get("/lore/stats/{world_id}", tags=["Stage 11 - GraphRAG Lore"])
+def get_lore_stats(world_id: int):
+    """
+    Gets statistics about the lore graph.
+    
+    Returns:
+    - Number of nodes (entities)
+    - Number of edges (events/relationships)
+    - Number of embeddings
+    - Graph file status
+    """
+    try:
+        pipeline = get_lore_pipeline(world_id)
+        stats = pipeline.get_stats()
+        
+        return stats
+    
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.delete("/lore/cache", tags=["Stage 11 - GraphRAG Lore"])
+def clear_lore_cache():
+    """
+    Clears the in-memory lore pipeline cache.
+    
+    Use this to free memory or force reload of graphs.
+    Does not delete saved graphs or embeddings.
+    """
+    clear_pipeline_cache()
+    return {
+        "status": "success",
+        "message": "Lore pipeline cache cleared"
+    }

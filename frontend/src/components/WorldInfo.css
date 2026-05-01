@@ -1,0 +1,219 @@
+.world-info {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.world-info.loading {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 400px;
+}
+
+.world-header {
+  margin-bottom: 24px;
+}
+
+.world-header h2 {
+  color: #667eea;
+  font-size: 28px;
+  margin-bottom: 8px;
+}
+
+.world-header p {
+  color: #a0aec0;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.world-stats {
+  margin-bottom: 32px;
+}
+
+.world-stats h3 {
+  color: #667eea;
+  margin-bottom: 16px;
+  font-size: 18px;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 16px;
+}
+
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  background: #1a1a2e;
+  border-radius: 4px;
+  text-align: center;
+}
+
+.stat-label {
+  font-size: 13px;
+  color: #a0aec0;
+  text-transform: uppercase;
+}
+
+.stat-value {
+  font-size: 24px;
+  font-weight: bold;
+  color: #667eea;
+}
+
+.factions-section,
+.events-section {
+  margin-bottom: 32px;
+}
+
+.factions-section h3,
+.events-section h3 {
+  color: #667eea;
+  margin-bottom: 16px;
+  font-size: 20px;
+}
+
+.factions-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+.faction-card {
+  border-left: 3px solid #667eea;
+}
+
+.faction-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  margin-bottom: 12px;
+}
+
+.faction-header h4 {
+  color: #e0e0e0;
+  font-size: 16px;
+  margin: 0;
+}
+
+.faction-type {
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 12px;
+  text-transform: capitalize;
+  background: #4a5568;
+  color: white;
+}
+
+.faction-description {
+  font-size: 14px;
+  color: #a0aec0;
+  margin-bottom: 12px;
+  line-height: 1.4;
+}
+
+.faction-motto {
+  font-style: italic;
+  color: #667eea;
+  font-size: 13px;
+  margin-bottom: 12px;
+  padding-left: 12px;
+  border-left: 2px solid #667eea;
+}
+
+.faction-stats {
+  display: flex;
+  gap: 16px;
+  padding-top: 12px;
+  border-top: 1px solid #4a5568;
+}
+
+.faction-stats > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #a0aec0;
+}
+
+.events-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.event-card {
+  border-left: 3px solid #48bb78;
+}
+
+.event-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  margin-bottom: 8px;
+}
+
+.event-header h4 {
+  color: #e0e0e0;
+  font-size: 16px;
+  margin: 0;
+}
+
+.event-day {
+  font-size: 12px;
+  color: #a0aec0;
+  background: #1a1a2e;
+  padding: 2px 8px;
+  border-radius: 3px;
+}
+
+.event-card p {
+  font-size: 14px;
+  color: #a0aec0;
+  margin-bottom: 12px;
+  line-height: 1.4;
+}
+
+.event-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.event-type {
+  padding: 2px 8px;
+  border-radius: 3px;
+  text-transform: capitalize;
+  background: #4a5568;
+  color: white;
+}
+
+.notable-badge {
+  padding: 2px 8px;
+  border-radius: 3px;
+  background: #ed8936;
+  color: white;
+}
+
+.importance {
+  color: #a0aec0;
+}
+
+.world-actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 32px;
+}
+
+.world-actions button {
+  background: #2d3748;
+  color: #e0e0e0;
+  padding: 12px 24px;
+}
+
+.world-actions button:hover {
+  background: #4a5568;
+}

@@ -1,0 +1,152 @@
+.lore-query {
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+.lore-header {
+  margin-bottom: 24px;
+}
+
+.lore-header h2 {
+  color: #667eea;
+  font-size: 28px;
+  margin-bottom: 8px;
+}
+
+.lore-header p {
+  color: #a0aec0;
+  font-size: 14px;
+}
+
+.query-form {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.query-form input {
+  flex: 1;
+  font-size: 16px;
+}
+
+.query-form button {
+  background: #667eea;
+  color: white;
+  padding: 12px 24px;
+  white-space: nowrap;
+}
+
+.query-form button:hover:not(:disabled) {
+  background: #5568d3;
+}
+
+.example-queries {
+  margin-bottom: 32px;
+}
+
+.example-queries p {
+  color: #a0aec0;
+  font-size: 14px;
+  margin-bottom: 12px;
+}
+
+.examples-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.example-btn {
+  background: #2d3748;
+  color: #a0aec0;
+  padding: 8px 16px;
+  font-size: 13px;
+  border-radius: 20px;
+}
+
+.example-btn:hover:not(:disabled) {
+  background: #4a5568;
+  color: #e0e0e0;
+}
+
+.lore-result {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.answer-card h3 {
+  color: #667eea;
+  margin-bottom: 16px;
+  font-size: 18px;
+}
+
+.answer-text {
+  font-size: 16px;
+  line-height: 1.8;
+  color: #e0e0e0;
+}
+
+.sources-section {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+.sources-card h4 {
+  color: #667eea;
+  font-size: 14px;
+  margin-bottom: 12px;
+}
+
+.entities-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.entity-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: #1a1a2e;
+  border-radius: 4px;
+}
+
+.entity-name {
+  color: #e0e0e0;
+  font-weight: 500;
+}
+
+.entity-type {
+  color: #a0aec0;
+  font-size: 13px;
+  text-transform: capitalize;
+}
+
+.events-list {
+  list-style: none;
+  padding: 0;
+}
+
+.events-list li {
+  padding: 8px 12px;
+  background: #1a1a2e;
+  border-radius: 4px;
+  margin-bottom: 8px;
+  border-left: 3px solid #667eea;
+  font-size: 14px;
+  color: #a0aec0;
+}
+
+.sources-stats {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: center;
+  gap: 24px;
+  padding: 12px;
+  background: #1a1a2e;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #a0aec0;
+}

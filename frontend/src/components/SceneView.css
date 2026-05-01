@@ -1,0 +1,183 @@
+.scene-view {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.scene-view.loading {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 400px;
+}
+
+.scene-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.scene-header h2 {
+  color: #667eea;
+  font-size: 28px;
+}
+
+.location-type {
+  background: #667eea;
+  color: white;
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 14px;
+  text-transform: capitalize;
+}
+
+.scene-description {
+  margin-bottom: 24px;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.scene-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.detail-card h4,
+.npcs-card h4,
+.quests-available h4,
+.recent-events h4 {
+  color: #667eea;
+  margin-bottom: 12px;
+  font-size: 16px;
+}
+
+.stats-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.stats-grid > div {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid #4a5568;
+}
+
+.stats-grid > div:last-child {
+  border-bottom: none;
+}
+
+.npc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.npc-item {
+  padding: 12px;
+  background: #1a1a2e;
+  border-radius: 4px;
+  border-left: 3px solid #667eea;
+}
+
+.npc-info {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.npc-info strong {
+  color: #e0e0e0;
+}
+
+.npc-role {
+  color: #a0aec0;
+  font-size: 13px;
+  text-transform: capitalize;
+}
+
+.npc-status {
+  display: flex;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.emotion {
+  padding: 2px 8px;
+  border-radius: 3px;
+  text-transform: capitalize;
+}
+
+.emotion.happy { background: #48bb78; color: white; }
+.emotion.neutral { background: #718096; color: white; }
+.emotion.suspicious { background: #ed8936; color: white; }
+.emotion.angry { background: #f56565; color: white; }
+.emotion.grateful { background: #4299e1; color: white; }
+
+.activity {
+  color: #a0aec0;
+}
+
+.quests-available {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.quests-available button {
+  background: #667eea;
+  color: white;
+}
+
+.quests-available button:hover {
+  background: #5568d3;
+}
+
+.events-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.event-item {
+  padding: 12px;
+  background: #1a1a2e;
+  border-radius: 4px;
+  border-left: 3px solid #48bb78;
+}
+
+.event-item strong {
+  display: block;
+  color: #e0e0e0;
+  margin-bottom: 4px;
+}
+
+.event-item p {
+  font-size: 14px;
+  color: #a0aec0;
+  margin-bottom: 8px;
+}
+
+.event-day {
+  font-size: 12px;
+  color: #718096;
+}
+
+.scene-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+.scene-actions button {
+  background: #2d3748;
+  color: #e0e0e0;
+  padding: 12px 24px;
+}
+
+.scene-actions button:hover {
+  background: #4a5568;
+}
